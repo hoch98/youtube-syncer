@@ -3,7 +3,7 @@ import { WebSocketServer } from 'ws';
 const wss = new WebSocketServer({ port: 3000 });
 
 let leader = null;
-let state = { video: "", time: 0 };
+let state = { video: "", time: 0, paused: false };
 
 const send = (ws, data) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(data));
 const broadcast = (data, exclude = null) => wss.clients.forEach(c => c !== exclude && send(c, data));
@@ -17,7 +17,7 @@ wss.on('connection', (ws) => {
   send(ws, { type: 'connection', leader: isLeader });
 
   if (!isLeader && state.video) {
-    send(ws, { type: 'sync', video: state.video, time: state.time });
+    send(ws, { type: 'sync', video: state.video, time: state.time, paused: state.paused });
   }
 
   ws.on('message', (raw) => {
@@ -29,13 +29,20 @@ wss.on('connection', (ws) => {
       case 'select_video':
         state.video = message.url;
         state.time = 0;
+        state.paused = false;
         console.log('Video selected:', state.video);
-        broadcast({ type: 'sync', video: state.video, time: state.time }, ws);
+        broadcast({ type: 'sync', video: state.video, time: state.time, paused: state.paused }, ws);
         break;
 
       case 'update_time':
         state.time = message.time;
         broadcast({ type: 'sync_time', time: state.time }, ws);
+        break;
+
+      case 'update_paused':
+        state.paused = message.paused;
+        console.log('Paused:', state.paused);
+        broadcast({ type: 'sync_paused', paused: state.paused }, ws);
         break;
     }
   });

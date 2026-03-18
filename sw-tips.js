@@ -2,7 +2,7 @@ console.log('Service worker started');
 
 let socket = null;
 let isLeader = null;
-let state = { video: null, time: 0 };
+let state = { video: null, time: 0, paused: false };
 
 function broadcastToYoutubeTabs(message) {
   chrome.tabs.query({ url: '*://*.youtube.com/*' }, (tabs) => {
@@ -39,12 +39,17 @@ function connectSocket() {
       case 'sync':
         state.video = data.video;
         state.time = data.time;
-        broadcastToYoutubeTabs({ type: 'sync', video: state.video, time: state.time });
+        state.paused = data.paused;
+        broadcastToYoutubeTabs({ type: 'sync', video: state.video, time: state.time, paused: state.paused });
         break;
 
       case 'sync_time':
         state.time = data.time;
-        broadcastToYoutubeTabs({ type: 'sync_time', time: state.time });
+        break;
+
+      case 'sync_paused':
+        state.paused = data.paused;
+        broadcastToYoutubeTabs({ type: 'sync_paused', paused: state.paused });
         break;
     }
   });
@@ -90,6 +95,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (data.type === 'sync') {
             state.video = data.video;
             state.time = data.time;
+            state.paused = data.paused;
           }
 
           if (isLeader !== null) {
@@ -109,6 +115,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case 'select_video':
     case 'update_time':
+    case 'update_paused':
       sendResponse({ ok: socketSend(message) });
       break;
   }

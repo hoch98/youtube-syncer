@@ -25,11 +25,20 @@ async function initLeader(video) {
   timeInterval = setInterval(() => {
     chrome.runtime.sendMessage({ type: 'update_time', time: video.currentTime });
   }, 1000);
+
+  video.addEventListener('pause', () => {
+    chrome.runtime.sendMessage({ type: 'update_paused', paused: true });
+  });
+  video.addEventListener('play', () => {
+    chrome.runtime.sendMessage({ type: 'update_paused', paused: false });
+  });
 }
 
-async function initFollower(video, initialTime) {
+async function initFollower(video, initialTime, initialPaused) {
   console.log('Initializing as follower, seeking to', initialTime);
   if (initialTime) video.currentTime = initialTime;
+  if (initialPaused) video.pause();
+  else video.play();
 }
 
 function teardown() {
@@ -68,7 +77,6 @@ async function poll() {
   const videoChanged = currentVideo !== window.location.href;
 
   if (!roleChanged && !videoChanged) {
-    // Sync check — only for follower, every 5 seconds
     if (!leader) {
       const video = document.querySelector('video');
       if (video) {
@@ -76,6 +84,9 @@ async function poll() {
         if (drift > 1) {
           console.log(`Drift detected: ${drift.toFixed(2)}s, correcting...`);
           video.currentTime = state.time;
+        }
+        if (video.paused !== state.paused) {
+          state.paused ? video.pause() : video.play();
         }
       }
     }
@@ -92,14 +103,55 @@ async function poll() {
   if (leader) {
     await initLeader(video);
   } else {
-    await initFollower(video, state.time);
+    await initFollower(video, state.time, state.paused);
   }
 }
 
-// 1 second poll for navigation/role changes
+chrome.runtime.onMessage.addListener(async (message) => {
+  switch (message.type) {
+    case 'connected':
+      teardown();
+      await poll();
+      break;
+
+    case 'disconnected':
+      teardown();
+      break;
+
+    case 'sync': {
+      if (message.video && window.location.href !== message.video) {
+        window.location.href = message.video;
+      } else {
+        const video = document.querySelector('video');
+        if (video) {
+          if (message.paused) video.pause();
+          else video.play();
+        }
+      }
+      break;
+    }
+
+    case 'sync_paused': {
+      const video = document.querySelector('video');
+      if (!video) break;
+      message.paused ? video.pause() : video.play();
+      break;
+    }
+
+    case 'sync_time': {
+      const video = document.querySelector('video');
+      if (!video) break;
+      const drift = Math.abs(video.currentTime - message.time);
+      if (drift > 2) video.currentTime = message.time;
+      break;
+    }
+  }
+});
+
+// 1 second poll for navigation and role changes
 pollInterval = setInterval(poll, 1000);
 
-// 5 second poll for drift correction
+// 5 second poll for drift and pause correction
 setInterval(() => {
   if (currentRole === 'follower') poll();
 }, 5000);
