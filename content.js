@@ -87,8 +87,10 @@ async function poll() {
     return;
   }
 
+  // replace the existing follower navigation check
   if (!leader) {
-    if (state.video && !isSameVideo(window.location.href, state.video)) {
+    if (!state.video) return; // leader hasn't selected a video yet, do nothing
+    if (!isSameVideo(window.location.href, state.video)) {
       navigateTo(state.video);
       return;
     }
@@ -171,6 +173,10 @@ chrome.runtime.onMessage.addListener(async (message) => {
       currentRole = null;
       currentVideo = null;
       navigating = false;
+      // Navigate away from the watch page
+      if (window.location.pathname.startsWith('/watch')) {
+        window.location.href = 'https://www.youtube.com';
+      }
       break;
     }
 
