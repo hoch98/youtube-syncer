@@ -5,11 +5,13 @@ let isLeader = null;
 let state = { video: null, time: 0, paused: false };
 let pendingPings = {};
 let connectedTabId = null;
+let injecting = false;
 
 function sendToTab(message) {
   if (connectedTabId === null) return;
   chrome.tabs.sendMessage(connectedTabId, message).catch(() => {
-    socket?.close();
+    // Don't close socket on failed message — tab might just be navigating
+    console.log('Failed to send to tab, tab may be navigating');
   });
 }
 
@@ -28,6 +30,27 @@ function measureRTT() {
   });
 }
 
+async function injectAndConnect() {
+  if (injecting || connectedTabId === null) return;
+  injecting = true;
+
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: connectedTabId },
+      files: ['content.js']
+    });
+    console.log('Content script injected');
+    // Small delay to let content script set up its listeners
+    setTimeout(() => {
+      sendToTab({ type: 'connected' });
+      injecting = false;
+    }, 500);
+  } catch (e) {
+    console.error('Failed to inject content script:', e);
+    injecting = false;
+  }
+}
+
 function connectSocket(tabId) {
   if (socket?.readyState === WebSocket.OPEN) return;
 
@@ -37,7 +60,7 @@ function connectSocket(tabId) {
 
   socket.addEventListener('open', () => {
     console.log('Socket connected');
-    sendToTab({ type: 'connected' });
+    injectAndConnect();
     chrome.runtime.sendMessage({ type: 'connected' }).catch(() => {});
   });
 
@@ -92,24 +115,19 @@ function connectSocket(tabId) {
     socket = null;
     isLeader = null;
     connectedTabId = null;
+    injecting = false;
     chrome.runtime.sendMessage({ type: 'disconnected' }).catch(() => {});
   });
 }
 
-// Re-inject content script when connected tab navigates
+// Re-inject when tab finishes loading (handles full page reloads)
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (tabId !== connectedTabId) return;
   if (changeInfo.status !== 'complete') return;
+  if (socket?.readyState !== WebSocket.OPEN) return;
 
-  console.log('Connected tab navigated, re-injecting content script');
-  chrome.scripting.executeScript({
-    target: { tabId },
-    files: ['content.js']
-  }).then(() => {
-    sendToTab({ type: 'connected' });
-  }).catch((e) => {
-    console.error('Failed to re-inject content script:', e);
-  });
+  console.log('Tab finished loading, re-injecting');
+  injectAndConnect();
 });
 
 // Disconnect when connected tab is closed
