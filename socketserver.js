@@ -34,13 +34,6 @@ wss.on('connection', (ws) => {
         broadcast({ type: 'sync', video: state.video, time: state.time, paused: state.paused }, ws);
         break;
 
-      case 'clear_video':
-        state.video = null;
-        state.time = 0;
-        state.paused = false;
-        console.log('Video cleared');
-        broadcast({ type: 'sync_cleared' }, ws);
-        break;
       case 'update_time':
         state.time = message.time;
         broadcast({ type: 'sync_time', time: state.time }, ws);
@@ -50,6 +43,26 @@ wss.on('connection', (ws) => {
         state.paused = message.paused;
         console.log('Paused:', state.paused);
         broadcast({ type: 'sync_paused', paused: state.paused }, ws);
+        break;
+
+      case 'clear_video':
+        state.video = null;
+        state.time = 0;
+        state.paused = false;
+        console.log('Video cleared');
+        broadcast({ type: 'sync_cleared' }, ws);
+        break;
+
+      case 'ping':
+        // Reflect ping straight back so client can measure RTT
+        send(ws, { type: 'pong', id: message.id });
+        break;
+
+      case 'rtt_report':
+        // Leader reports follower RTT so we can tell leader to delay
+        if (ws === leader) {
+          send(ws, { type: 'start_delay', delay: message.rtt / 2 });
+        }
         break;
     }
   });

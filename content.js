@@ -33,8 +33,37 @@ let currentRole = null;
 let currentVideo = null;
 let navigating = false;
 
+async function measureAndDelayLeader(video) {
+  // Measure RTT via service worker
+  const { rtt } = await chrome.runtime.sendMessage({ type: 'measure_rtt' });
+  console.log('RTT:', rtt + 'ms, delaying leader start by', rtt / 2 + 'ms');
+
+  // Report RTT to server so it can tell us the delay
+  await chrome.runtime.sendMessage({ type: 'rtt_report', rtt });
+
+  // Pause and wait for start_delay message before playing
+  video.pause();
+
+  return new Promise((resolve) => {
+    const handler = (message) => {
+      if (message.type === 'start_delay') {
+        setTimeout(() => {
+          video.play();
+          resolve(message.delay);
+        }, message.delay);
+        return true;
+      }
+    };
+    chrome.runtime.onMessage.addListener(handler);
+  });
+}
+
 async function initLeader(video) {
   console.log('Initializing as leader');
+
+  // Measure RTT and delay start so follower can catch up
+  await measureAndDelayLeader(video);
+
   chrome.runtime.sendMessage({ type: 'select_video', url: window.location.href });
 
   if (timeInterval) clearInterval(timeInterval);
@@ -87,9 +116,8 @@ async function poll() {
     return;
   }
 
-  // replace the existing follower navigation check
   if (!leader) {
-    if (!state.video) return; // leader hasn't selected a video yet, do nothing
+    if (!state.video) return;
     if (!isSameVideo(window.location.href, state.video)) {
       navigateTo(state.video);
       return;
@@ -173,7 +201,6 @@ chrome.runtime.onMessage.addListener(async (message) => {
       currentRole = null;
       currentVideo = null;
       navigating = false;
-      // Navigate away from the watch page
       if (window.location.pathname.startsWith('/watch')) {
         window.location.href = 'https://www.youtube.com';
       }

@@ -3,6 +3,7 @@ console.log('Service worker started');
 let socket = null;
 let isLeader = null;
 let state = { video: null, time: 0, paused: false };
+let pendingPings = {};
 
 function broadcastToYoutubeTabs(message) {
   chrome.tabs.query({ url: '*://*.youtube.com/*' }, (tabs) => {
@@ -12,10 +13,26 @@ function broadcastToYoutubeTabs(message) {
   });
 }
 
+function measureRTT() {
+  return new Promise((resolve) => {
+    const id = Math.random().toString(36).slice(2);
+    const start = Date.now();
+    pendingPings[id] = { resolve, start };
+    socketSend({ type: 'ping', id });
+    // Timeout after 3s
+    setTimeout(() => {
+      if (pendingPings[id]) {
+        delete pendingPings[id];
+        resolve(300); // fallback to 300ms if no response
+      }
+    }, 3000);
+  });
+}
+
 function connectSocket() {
   if (socket?.readyState === WebSocket.OPEN) return;
 
-  socket = new WebSocket('ws://192.168.1.6:3000');
+  socket = new WebSocket('ws://localhost:3000');
 
   socket.addEventListener('open', () => {
     console.log('Socket connected');
@@ -51,7 +68,7 @@ function connectSocket() {
         state.paused = data.paused;
         broadcastToYoutubeTabs({ type: 'sync_paused', paused: state.paused });
         break;
-      // in socket message handler
+
       case 'sync_cleared':
         state.video = null;
         state.time = 0;
@@ -59,9 +76,16 @@ function connectSocket() {
         broadcastToYoutubeTabs({ type: 'sync_cleared' });
         break;
 
-      // in chrome.runtime.onMessage handler
-      case 'clear_video':
-        sendResponse({ ok: socketSend(message) });
+      case 'pong':
+        if (pendingPings[data.id]) {
+          const rtt = Date.now() - pendingPings[data.id].start;
+          pendingPings[data.id].resolve(rtt);
+          delete pendingPings[data.id];
+        }
+        break;
+
+      case 'start_delay':
+        broadcastToYoutubeTabs({ type: 'start_delay', delay: data.delay });
         break;
     }
   });
@@ -125,9 +149,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       break;
 
+    case 'measure_rtt':
+      measureRTT().then((rtt) => {
+        console.log('RTT measured:', rtt + 'ms');
+        sendResponse({ rtt });
+      });
+      break;
+
     case 'select_video':
     case 'update_time':
     case 'update_paused':
+    case 'clear_video':
+    case 'rtt_report':
       sendResponse({ ok: socketSend(message) });
       break;
   }
