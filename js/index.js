@@ -3,6 +3,19 @@ function updateUI({ connected, leader }) {
   document.getElementById("leaderInfo").innerText = `Leader: ${connected ? leader : '~~~'}`;
 }
 
+// Load saved URL on popup open
+chrome.storage.local.get('wsUrl', (data) => {
+  document.getElementById("wsUrl").value = data.wsUrl || 'ws://192.168.1.6:3000';
+});
+
+document.getElementById("saveUrl").onclick = () => {
+  const url = document.getElementById("wsUrl").value.trim();
+  chrome.storage.local.set({ wsUrl: url }, () => {
+    document.getElementById("saveUrl").innerText = 'Saved!';
+    setTimeout(() => document.getElementById("saveUrl").innerText = 'Save URL', 1000);
+  });
+};
+
 document.getElementById("connectButton").onclick = () => {
   chrome.runtime.sendMessage({ type: 'connect' });
 };
