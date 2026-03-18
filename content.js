@@ -12,10 +12,26 @@ function waitForElement(selector) {
   });
 }
 
+function getVideoId(url) {
+  try {
+    return new URL(url).searchParams.get('v');
+  } catch {
+    return null;
+  }
+}
+
+function isSameVideo(url1, url2) {
+  if (!url1 || !url2) return false;
+  const id1 = getVideoId(url1);
+  const id2 = getVideoId(url2);
+  if (id1 && id2) return id1 === id2;
+  return url1 === url2;
+}
+
 let timeInterval = null;
-let pollInterval = null;
 let currentRole = null;
 let currentVideo = null;
+let navigating = false;
 
 async function initLeader(video) {
   console.log('Initializing as leader');
@@ -45,6 +61,15 @@ function teardown() {
   if (timeInterval) { clearInterval(timeInterval); timeInterval = null; }
   currentRole = null;
   currentVideo = null;
+  navigating = false;
+}
+
+function navigateTo(url) {
+  if (navigating) return;
+  navigating = true;
+  console.log('Navigating to:', url);
+  window.location.href = url;
+  setTimeout(() => { navigating = false; }, 5000);
 }
 
 async function poll() {
@@ -63,16 +88,15 @@ async function poll() {
   }
 
   if (!leader) {
-    if (state.video && window.location.href !== state.video) {
-      console.log('Follower navigating to:', state.video);
-      window.location.href = state.video;
+    if (state.video && !isSameVideo(window.location.href, state.video)) {
+      navigateTo(state.video);
       return;
     }
   }
 
   const onWatchPage = window.location.pathname.startsWith('/watch');
+
   if (!onWatchPage) {
-    // Leader left the watch page, clear the video for followers
     if (leader && currentVideo !== null) {
       currentVideo = null;
       chrome.runtime.sendMessage({ type: 'clear_video' });
@@ -80,8 +104,12 @@ async function poll() {
     return;
   }
 
+  if (navigating && isSameVideo(window.location.href, state.video)) {
+    navigating = false;
+  }
+
   const roleChanged = currentRole !== (leader ? 'leader' : 'follower');
-  const videoChanged = currentVideo !== window.location.href;
+  const videoChanged = !isSameVideo(currentVideo, window.location.href);
 
   if (!roleChanged && !videoChanged) {
     if (!leader) {
@@ -126,8 +154,8 @@ chrome.runtime.onMessage.addListener(async (message) => {
       break;
 
     case 'sync': {
-      if (message.video && window.location.href !== message.video) {
-        window.location.href = message.video;
+      if (message.video && !isSameVideo(window.location.href, message.video)) {
+        navigateTo(message.video);
       } else {
         const video = document.querySelector('video');
         if (video) {
@@ -135,6 +163,14 @@ chrome.runtime.onMessage.addListener(async (message) => {
           else video.play();
         }
       }
+      break;
+    }
+
+    case 'sync_cleared': {
+      console.log('Video cleared by leader');
+      currentRole = null;
+      currentVideo = null;
+      navigating = false;
       break;
     }
 
@@ -152,19 +188,11 @@ chrome.runtime.onMessage.addListener(async (message) => {
       if (drift > 2) video.currentTime = message.time;
       break;
     }
-    case 'sync_cleared': {
-      console.log('Video cleared by leader');
-      currentRole = null;
-      currentVideo = null;
-      break;
-    }
   }
 });
 
-// 1 second poll for navigation and role changes
-pollInterval = setInterval(poll, 1000);
+setInterval(poll, 1000);
 
-// 5 second poll for drift and pause correction
 setInterval(() => {
   if (currentRole === 'follower') poll();
 }, 5000);
