@@ -32,7 +32,7 @@ function measureRTT() {
 function connectSocket() {
   if (socket?.readyState === WebSocket.OPEN) return;
 
-  socket = new WebSocket('ws://localhost:3000');
+  socket = new WebSocket('ws://192.168.1.6:3000');
 
   socket.addEventListener('open', () => {
     console.log('Socket connected');
