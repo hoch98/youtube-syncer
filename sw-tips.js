@@ -9,7 +9,6 @@ let connectedTabId = null;
 function sendToTab(message) {
   if (connectedTabId === null) return;
   chrome.tabs.sendMessage(connectedTabId, message).catch(() => {
-    // Tab probably closed, disconnect
     socket?.close();
   });
 }
@@ -97,16 +96,7 @@ function connectSocket(tabId) {
   });
 }
 
-// Disconnect when the connected tab is closed
-chrome.tabs.onRemoved.addListener((tabId) => {
-  if (tabId === connectedTabId) {
-    console.log('Connected tab closed, disconnecting');
-    socket?.close();
-    connectedTabId = null;
-  }
-});
-
-// In sw-tips.js, add this listener
+// Re-inject content script when connected tab navigates
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (tabId !== connectedTabId) return;
   if (changeInfo.status !== 'complete') return;
@@ -120,6 +110,14 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   }).catch((e) => {
     console.error('Failed to re-inject content script:', e);
   });
+});
+
+// Disconnect when connected tab is closed
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (tabId !== connectedTabId) return;
+  console.log('Connected tab closed, disconnecting');
+  socket?.close();
+  connectedTabId = null;
 });
 
 function socketSend(data) {
