@@ -15,7 +15,7 @@ function broadcastToYoutubeTabs(message) {
 function connectSocket() {
   if (socket?.readyState === WebSocket.OPEN) return;
 
-  socket = new WebSocket('ws://localhost:3000');
+  socket = new WebSocket('ws://192.168.1.6:3000');
 
   socket.addEventListener('open', () => {
     console.log('Socket connected');
@@ -50,6 +50,18 @@ function connectSocket() {
       case 'sync_paused':
         state.paused = data.paused;
         broadcastToYoutubeTabs({ type: 'sync_paused', paused: state.paused });
+        break;
+      // in socket message handler
+      case 'sync_cleared':
+        state.video = null;
+        state.time = 0;
+        state.paused = false;
+        broadcastToYoutubeTabs({ type: 'sync_cleared' });
+        break;
+
+      // in chrome.runtime.onMessage handler
+      case 'clear_video':
+        sendResponse({ ok: socketSend(message) });
         break;
     }
   });

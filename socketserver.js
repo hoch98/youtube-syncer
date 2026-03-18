@@ -34,6 +34,13 @@ wss.on('connection', (ws) => {
         broadcast({ type: 'sync', video: state.video, time: state.time, paused: state.paused }, ws);
         break;
 
+      case 'clear_video':
+        state.video = null;
+        state.time = 0;
+        state.paused = false;
+        console.log('Video cleared');
+        broadcast({ type: 'sync_cleared' }, ws);
+        break;
       case 'update_time':
         state.time = message.time;
         broadcast({ type: 'sync_time', time: state.time }, ws);

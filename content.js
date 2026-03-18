@@ -71,7 +71,14 @@ async function poll() {
   }
 
   const onWatchPage = window.location.pathname.startsWith('/watch');
-  if (!onWatchPage) return;
+  if (!onWatchPage) {
+    // Leader left the watch page, clear the video for followers
+    if (leader && currentVideo !== null) {
+      currentVideo = null;
+      chrome.runtime.sendMessage({ type: 'clear_video' });
+    }
+    return;
+  }
 
   const roleChanged = currentRole !== (leader ? 'leader' : 'follower');
   const videoChanged = currentVideo !== window.location.href;
@@ -143,6 +150,12 @@ chrome.runtime.onMessage.addListener(async (message) => {
       if (!video) break;
       const drift = Math.abs(video.currentTime - message.time);
       if (drift > 2) video.currentTime = message.time;
+      break;
+    }
+    case 'sync_cleared': {
+      console.log('Video cleared by leader');
+      currentRole = null;
+      currentVideo = null;
       break;
     }
   }
