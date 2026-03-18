@@ -33,38 +33,29 @@ let currentRole = null;
 let currentVideo = null;
 let navigating = false;
 
-async function measureAndDelayLeader(video) {
-  // Measure RTT via service worker
-  const { rtt } = await chrome.runtime.sendMessage({ type: 'measure_rtt' });
-  console.log('RTT:', rtt + 'ms, delaying leader start by', rtt / 2 + 'ms');
-
-  // Report RTT to server so it can tell us the delay
-  await chrome.runtime.sendMessage({ type: 'rtt_report', rtt });
-
-  // Pause and wait for start_delay message before playing
-  video.pause();
-
-  return new Promise((resolve) => {
-    const handler = (message) => {
-      if (message.type === 'start_delay') {
-        setTimeout(() => {
-          video.play();
-          resolve(message.delay);
-        }, message.delay);
-        return true;
-      }
-    };
-    chrome.runtime.onMessage.addListener(handler);
-  });
+async function getLeaderDelay() {
+  try {
+    const { rtt } = await chrome.runtime.sendMessage({ type: 'measure_rtt' });
+    console.log('RTT:', rtt + 'ms, delaying leader by', rtt / 2 + 'ms');
+    return rtt / 2;
+  } catch {
+    return 0;
+  }
 }
 
 async function initLeader(video) {
   console.log('Initializing as leader');
 
-  // Measure RTT and delay start so follower can catch up
-  await measureAndDelayLeader(video);
-
+  // Broadcast video immediately so follower starts loading
   chrome.runtime.sendMessage({ type: 'select_video', url: window.location.href });
+
+  // Measure RTT then delay leader start to let follower catch up
+  const delay = await getLeaderDelay();
+  if (delay > 0) {
+    video.pause();
+    await new Promise(resolve => setTimeout(resolve, delay));
+    video.play();
+  }
 
   if (timeInterval) clearInterval(timeInterval);
   timeInterval = setInterval(() => {
