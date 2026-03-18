@@ -32,70 +32,70 @@ function connectSocket() {
   if (socket?.readyState === WebSocket.OPEN) return;
 
   chrome.storage.local.get('wsUrl', (data) => {
-    const url = data.wsUrl || 'ws://localhost:3000';
+    const url = data.wsUrl || 'ws://192.168.1.6:3000';
     console.log('Connecting to:', url);
 
     socket = new WebSocket(url);
-  });
 
-  socket.addEventListener('open', () => {
-    console.log('Socket connected');
-    broadcastToYoutubeTabs({ type: 'connected' });
-    chrome.runtime.sendMessage({ type: 'connected' }).catch(() => {});
-  });
+    socket.addEventListener('open', () => {
+      console.log('Socket connected');
+      broadcastToYoutubeTabs({ type: 'connected' });
+      chrome.runtime.sendMessage({ type: 'connected' }).catch(() => {});
+    });
 
-  socket.addEventListener('message', (event) => {
-    let data = null;
-    try { data = JSON.parse(event.data); }
-    catch { return; }
-    if (!data) return;
+    socket.addEventListener('message', (event) => {
+      let data = null;
+      try { data = JSON.parse(event.data); }
+      catch { return; }
+      if (!data) return;
 
-    switch (data.type) {
-      case 'connection':
-        isLeader = data.leader;
-        console.log('Role assigned:', isLeader ? 'leader' : 'follower');
-        chrome.runtime.sendMessage({ type: 'connection', leader: isLeader }).catch(() => {});
-        break;
+      switch (data.type) {
+        case 'connection':
+          isLeader = data.leader;
+          console.log('Role assigned:', isLeader ? 'leader' : 'follower');
+          chrome.runtime.sendMessage({ type: 'connection', leader: isLeader }).catch(() => {});
+          break;
 
-      case 'sync':
-        state.video = data.video;
-        state.time = data.time;
-        state.paused = data.paused;
-        broadcastToYoutubeTabs({ type: 'sync', video: state.video, time: state.time, paused: state.paused });
-        break;
+        case 'sync':
+          state.video = data.video;
+          state.time = data.time;
+          state.paused = data.paused;
+          broadcastToYoutubeTabs({ type: 'sync', video: state.video, time: state.time, paused: state.paused });
+          break;
 
-      case 'sync_time':
-        state.time = data.time;
-        break;
+        case 'sync_time':
+          state.time = data.time;
+          break;
 
-      case 'sync_paused':
-        state.paused = data.paused;
-        broadcastToYoutubeTabs({ type: 'sync_paused', paused: state.paused });
-        break;
+        case 'sync_paused':
+          state.paused = data.paused;
+          broadcastToYoutubeTabs({ type: 'sync_paused', paused: state.paused });
+          break;
 
-      case 'sync_cleared':
-        state.video = null;
-        state.time = 0;
-        state.paused = false;
-        broadcastToYoutubeTabs({ type: 'sync_cleared' });
-        break;
+        case 'sync_cleared':
+          state.video = null;
+          state.time = 0;
+          state.paused = false;
+          broadcastToYoutubeTabs({ type: 'sync_cleared' });
+          break;
 
-      case 'pong':
-        if (pendingPings[data.id]) {
-          const rtt = Date.now() - pendingPings[data.id].start;
-          pendingPings[data.id].resolve(rtt);
-          delete pendingPings[data.id];
-        }
-        break;
-    }
-  });
+        case 'pong':
+          if (pendingPings[data.id]) {
+            const rtt = Date.now() - pendingPings[data.id].start;
+            pendingPings[data.id].resolve(rtt);
+            delete pendingPings[data.id];
+          }
+          break;
+      }
+    });
 
-  socket.addEventListener('close', () => {
-    console.log('Socket disconnected');
-    socket = null;
-    isLeader = null;
-    broadcastToYoutubeTabs({ type: 'disconnected' });
-    chrome.runtime.sendMessage({ type: 'disconnected' }).catch(() => {});
+    socket.addEventListener('close', () => {
+      console.log('Socket disconnected');
+      socket = null;
+      isLeader = null;
+      broadcastToYoutubeTabs({ type: 'disconnected' });
+      chrome.runtime.sendMessage({ type: 'disconnected' }).catch(() => {});
+    });
   });
 }
 
