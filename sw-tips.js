@@ -106,6 +106,22 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   }
 });
 
+// In sw-tips.js, add this listener
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (tabId !== connectedTabId) return;
+  if (changeInfo.status !== 'complete') return;
+
+  console.log('Connected tab navigated, re-injecting content script');
+  chrome.scripting.executeScript({
+    target: { tabId },
+    files: ['content.js']
+  }).then(() => {
+    sendToTab({ type: 'connected' });
+  }).catch((e) => {
+    console.error('Failed to re-inject content script:', e);
+  });
+});
+
 function socketSend(data) {
   if (socket?.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify(data));
