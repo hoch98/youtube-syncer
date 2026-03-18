@@ -1,51 +1,117 @@
-console.log("tips")
+console.log('Service worker started');
 
-// service-worker.js
 let socket = null;
-let leader = null;
-let currentVideo = null;
+let isLeader = null;
+let state = { video: null, time: 0 };
+
+function broadcastToYoutubeTabs(message) {
+  chrome.tabs.query({ url: '*://*.youtube.com/*' }, (tabs) => {
+    tabs.forEach(tab =>
+      chrome.tabs.sendMessage(tab.id, message).catch(() => {})
+    );
+  });
+}
 
 function connectSocket() {
+  if (socket?.readyState === WebSocket.OPEN) return;
+
   socket = new WebSocket('ws://localhost:3000');
 
   socket.addEventListener('open', () => {
     console.log('Socket connected');
+    broadcastToYoutubeTabs({ type: 'connected' });
+    chrome.runtime.sendMessage({ type: 'connected' }).catch(() => {});
   });
 
   socket.addEventListener('message', (event) => {
-    const data = JSON.parse(event.data);
-    if (data.type == "connection") {
-      leader = data.leader;
-    } if (data.type == "get_video") {
-      currentVideo = data.video
+    let data = null;
+    try { data = JSON.parse(event.data); }
+    catch { return; }
+    if (!data) return;
+
+    switch (data.type) {
+      case 'connection':
+        isLeader = data.leader;
+        console.log('Role assigned:', isLeader ? 'leader' : 'follower');
+        chrome.runtime.sendMessage({ type: 'connection', leader: isLeader }).catch(() => {});
+        break;
+
+      case 'sync':
+        state.video = data.video;
+        state.time = data.time;
+        broadcastToYoutubeTabs({ type: 'sync', video: state.video, time: state.time });
+        break;
+
+      case 'sync_time':
+        state.time = data.time;
+        broadcastToYoutubeTabs({ type: 'sync_time', time: state.time });
+        break;
     }
   });
 
   socket.addEventListener('close', () => {
     console.log('Socket disconnected');
-    socket = null
-    leader = null;
+    socket = null;
+    isLeader = null;
+    broadcastToYoutubeTabs({ type: 'disconnected' });
+    chrome.runtime.sendMessage({ type: 'disconnected' }).catch(() => {});
   });
 }
 
-// connectSocket();
+function socketSend(data) {
+  if (socket?.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify(data));
+    return true;
+  }
+  return false;
+}
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  // if (!socket || socket.readyState !== WebSocket.OPEN) {
-  //   connectSocket();
-  // }
-  if (message.type == "socket_info") {
-    sendResponse({"socket": (socket != undefined), "leader": leader})
-  } if (message.type == "connect") {
-    connectSocket();
-  } if (message.type == "disconnect") {
-    if (socket != null) {
-      socket.close()
-    }
-  } else {
-    socket.send(JSON.stringify(message));
+  switch (message.type) {
+    case 'connect':
+      connectSocket();
+      sendResponse({ ok: true });
+      break;
+
+    case 'disconnect':
+      socket?.close();
+      sendResponse({ ok: true });
+      break;
+
+    case 'socket_info':
+      if (socket?.readyState === WebSocket.OPEN && isLeader === null) {
+        const handler = (event) => {
+          let data = null;
+          try { data = JSON.parse(event.data); }
+          catch { return; }
+          if (!data) return;
+
+          if (data.type === 'connection') isLeader = data.leader;
+          if (data.type === 'sync') {
+            state.video = data.video;
+            state.time = data.time;
+          }
+
+          if (isLeader !== null) {
+            socket.removeEventListener('message', handler);
+            sendResponse({ connected: true, leader: isLeader, state });
+          }
+        };
+        socket.addEventListener('message', handler);
+      } else {
+        sendResponse({
+          connected: socket?.readyState === WebSocket.OPEN,
+          leader: isLeader,
+          state
+        });
+      }
+      break;
+
+    case 'select_video':
+    case 'update_time':
+      sendResponse({ ok: socketSend(message) });
+      break;
   }
 
   return true;
-
 });

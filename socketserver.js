@@ -1,64 +1,55 @@
-// server.js
 import { WebSocketServer } from 'ws';
 
 const wss = new WebSocketServer({ port: 3000 });
 
-var leader = undefined;
-var follower = undefined;
+let leader = null;
+let state = { video: "", time: 0 };
 
-var currentVideo = "";
-var currentTime = 0;
+const send = (ws, data) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(data));
+const broadcast = (data, exclude = null) => wss.clients.forEach(c => c !== exclude && send(c, data));
 
 wss.on('connection', (ws) => {
-  console.log('Client connected');
+  const isLeader = leader === null;
+  if (isLeader) leader = ws;
 
-  if (leader == undefined) {
-    leader = ws;
-    console.log("Leader has been chosen")
-    ws.send(JSON.stringify({
-      "type":"connection",
-      "leader": true
-    }))
-  } else if (follower == undefined) {
-    follower = ws;
-    console.log("Follower has been chosen")
-    ws.send(JSON.stringify({
-      "type":"connection",
-      "leader": false
-    }))
+  console.log(`Client connected as ${isLeader ? 'leader' : 'follower'}`);
+
+  send(ws, { type: 'connection', leader: isLeader });
+
+  if (!isLeader && state.video) {
+    send(ws, { type: 'sync', video: state.video, time: state.time });
   }
 
   ws.on('message', (raw) => {
-    const message = JSON.parse(raw);
+    let message;
+    try { message = JSON.parse(raw); }
+    catch { return; }
 
-    if (message.type === 'select_video') {
-      currentVideo = message.url
-      console.log("video chosen: "+currentVideo)
-    }
-    if (message.type === 'update_time') {
-      currentTime = message.timestamp
-    } if (message.type === "get_video") {
-      ws.send(JSON.stringify({
-        "type": "select_video",
-        "url": currentVideo
-      }))
+    switch (message.type) {
+      case 'select_video':
+        state.video = message.url;
+        state.time = 0;
+        console.log('Video selected:', state.video);
+        broadcast({ type: 'sync', video: state.video, time: state.time }, ws);
+        break;
+
+      case 'update_time':
+        state.time = message.time;
+        broadcast({ type: 'sync_time', time: state.time }, ws);
+        break;
     }
   });
 
-  ws.on("close", () => {
-    if (ws == leader) {
-      leader = follower;
-      follower = undefined;
+  ws.on('close', () => {
+    console.log(`${ws === leader ? 'Leader' : 'Follower'} disconnected`);
+    if (ws === leader) {
+      leader = [...wss.clients][0] ?? null;
       if (leader) {
-        leader.send(JSON.stringify({
-          "type":"connection",
-          "leader": true
-        }))
+        send(leader, { type: 'connection', leader: true });
+        console.log('Promoted new leader');
       }
-      console.log("Leader disconnected, promoting follower to leader")
-    } else if (ws == follower) {
-      follower = undefined;
-      console.log("Follower disconnected")
     }
-  })
+  });
 });
+
+console.log('Socket server running on ws://localhost:3000');

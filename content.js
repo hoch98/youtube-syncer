@@ -1,73 +1,107 @@
 function waitForElement(selector) {
-  console.log("waiting of relement")
   return new Promise((resolve) => {
     const el = document.querySelector(selector);
     if (el) return resolve(el);
 
     const observer = new MutationObserver(() => {
       const el = document.querySelector(selector);
-      if (el) {
-        observer.disconnect();
-        console.log("resolved")
-        resolve(el);
-      }
+      if (el) { observer.disconnect(); resolve(el); }
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
   });
 }
 
-var currentTime = 0;
-var isLeader = undefined;
+let timeInterval = null;
+let pollInterval = null;
+let currentRole = null;
+let currentVideo = null;
 
-(async () => {
-  if (isLeader == undefined) return;
+async function initLeader(video) {
+  console.log('Initializing as leader');
+  chrome.runtime.sendMessage({ type: 'select_video', url: window.location.href });
 
-  if (window.location.pathname.startsWith('/watch') && isLeader) {
-    const video = await waitForElement('video');
-    console.log("Video found, starting time tracking...");
+  if (timeInterval) clearInterval(timeInterval);
+  timeInterval = setInterval(() => {
+    chrome.runtime.sendMessage({ type: 'update_time', time: video.currentTime });
+  }, 1000);
+}
 
-    await chrome.runtime.sendMessage({ type: 'select_video', url: window.location.href });
+async function initFollower(video, initialTime) {
+  console.log('Initializing as follower, seeking to', initialTime);
+  if (initialTime) video.currentTime = initialTime;
+}
 
-    // Log current time every second
-    setInterval(() => {
-      currentTime = video.currentTime
-      // console.log(`Current time: ${video.currentTime.toFixed(2)}s`);
+function teardown() {
+  if (timeInterval) { clearInterval(timeInterval); timeInterval = null; }
+  currentRole = null;
+  currentVideo = null;
+}
 
-      //chrome.runtime.sendMessage({ type: 'update_time', url: currentTime });
-
-    }, 1000);
-  } else {
-    setInterval(() => {
-      currentTime = video.currentTime
-      // console.log(`Current time: ${video.currentTime.toFixed(2)}s`);
-
-      //chrome.runtime.sendMessage({ type: 'update_time', url: currentTime });
-
-    }, 1000);
+async function poll() {
+  let res;
+  try {
+    res = await chrome.runtime.sendMessage({ type: 'socket_info' });
+  } catch {
+    return;
   }
-})();
 
-chrome.runtime.sendMessage({ type: 'socket_info' }).then(async (data) => {
+  const { connected, leader, state } = res;
 
-  if (data.socket) {
-    isLeader = data.leader;
-    if (window.location.pathname.startsWith('/watch')) {
-      const video = await waitForElement('video');
-      console.log("Video found, starting time tracking...");
+  if (!connected) {
+    teardown();
+    return;
+  }
 
-      chrome.runtime.sendMessage({ type: 'select_video', url: window.location.href });
-
-      // Log current time every second
-      setInterval(() => {
-        currentTime = video.currentTime
-        // console.log(`Current time: ${video.currentTime.toFixed(2)}s`);
-
-        //chrome.runtime.sendMessage({ type: 'update_time', url: currentTime });
-
-      }, 1000);
+  if (!leader) {
+    if (state.video && window.location.href !== state.video) {
+      console.log('Follower navigating to:', state.video);
+      window.location.href = state.video;
+      return;
     }
-  } else {
-    isLeader = undefined;
   }
-})
+
+  const onWatchPage = window.location.pathname.startsWith('/watch');
+  if (!onWatchPage) return;
+
+  const roleChanged = currentRole !== (leader ? 'leader' : 'follower');
+  const videoChanged = currentVideo !== window.location.href;
+
+  if (!roleChanged && !videoChanged) {
+    // Sync check — only for follower, every 5 seconds
+    if (!leader) {
+      const video = document.querySelector('video');
+      if (video) {
+        const drift = Math.abs(video.currentTime - state.time);
+        if (drift > 1) {
+          console.log(`Drift detected: ${drift.toFixed(2)}s, correcting...`);
+          video.currentTime = state.time;
+        }
+      }
+    }
+    return;
+  }
+
+  currentRole = leader ? 'leader' : 'follower';
+  currentVideo = window.location.href;
+
+  if (timeInterval) { clearInterval(timeInterval); timeInterval = null; }
+
+  const video = await waitForElement('video');
+
+  if (leader) {
+    await initLeader(video);
+  } else {
+    await initFollower(video, state.time);
+  }
+}
+
+// 1 second poll for navigation/role changes
+pollInterval = setInterval(poll, 1000);
+
+// 5 second poll for drift correction
+setInterval(() => {
+  if (currentRole === 'follower') poll();
+}, 5000);
+
+poll();

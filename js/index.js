@@ -1,20 +1,22 @@
-document.getElementById("connectButton").onclick = function() {
-  chrome.runtime.sendMessage({ type: 'connect'});
+function updateUI({ connected, leader }) {
+  document.getElementById("socketInfo").innerText = `Socket: ${connected ? 'open' : 'closed'}`;
+  document.getElementById("leaderInfo").innerText = `Leader: ${connected ? leader : '~~~'}`;
 }
 
-document.getElementById("disconnectButton").onclick = function() {
-  chrome.runtime.sendMessage({ type: 'disconnect'});
-}
+document.getElementById("connectButton").onclick = () => {
+  chrome.runtime.sendMessage({ type: 'connect' });
+};
 
-setInterval(async () => {
-  chrome.runtime.sendMessage({ type: 'socket_info' }).then((data) => {
+document.getElementById("disconnectButton").onclick = () => {
+  chrome.runtime.sendMessage({ type: 'disconnect' });
+};
 
-    if (data.socket) {
-      document.getElementById("socketInfo").innerText = "Socket: open"
-      document.getElementById("leaderInfo").innerText = "Leader: "+data.leader
-    } else {
-      document.getElementById("socketInfo").innerText = "Socket: closed"
-      document.getElementById("leaderInfo").innerText = "Leader: ~~~"
-    }
-  })
-}, 1000)
+chrome.runtime.onMessage.addListener((message) => {
+  if (message.type === 'connected') updateUI({ connected: true, leader: null });
+  if (message.type === 'disconnected') updateUI({ connected: false, leader: null });
+  if (message.type === 'connection') updateUI({ connected: true, leader: message.leader });
+});
+
+chrome.runtime.sendMessage({ type: 'socket_info' }).then((data) => {
+  updateUI({ connected: data.connected, leader: data.leader });
+});
