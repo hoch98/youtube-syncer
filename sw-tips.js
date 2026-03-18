@@ -4,14 +4,12 @@ let socket = null;
 let isLeader = null;
 let state = { video: null, time: 0, paused: false };
 let pendingPings = {};
-let connectedTabId = null;
-let injecting = false;
 
-function sendToTab(message) {
-  if (connectedTabId === null) return;
-  chrome.tabs.sendMessage(connectedTabId, message).catch(() => {
-    // Don't close socket on failed message — tab might just be navigating
-    console.log('Failed to send to tab, tab may be navigating');
+function broadcastToYoutubeTabs(message) {
+  chrome.tabs.query({ url: '*://*.youtube.com/*' }, (tabs) => {
+    tabs.forEach(tab =>
+      chrome.tabs.sendMessage(tab.id, message).catch(() => {})
+    );
   });
 }
 
@@ -30,37 +28,14 @@ function measureRTT() {
   });
 }
 
-async function injectAndConnect() {
-  if (injecting || connectedTabId === null) return;
-  injecting = true;
-
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId: connectedTabId },
-      files: ['content.js']
-    });
-    console.log('Content script injected');
-    // Small delay to let content script set up its listeners
-    setTimeout(() => {
-      sendToTab({ type: 'connected' });
-      injecting = false;
-    }, 500);
-  } catch (e) {
-    console.error('Failed to inject content script:', e);
-    injecting = false;
-  }
-}
-
-function connectSocket(tabId) {
+function connectSocket() {
   if (socket?.readyState === WebSocket.OPEN) return;
-
-  connectedTabId = tabId;
 
   socket = new WebSocket('ws://192.168.1.6:3000');
 
   socket.addEventListener('open', () => {
     console.log('Socket connected');
-    injectAndConnect();
+    broadcastToYoutubeTabs({ type: 'connected' });
     chrome.runtime.sendMessage({ type: 'connected' }).catch(() => {});
   });
 
@@ -81,7 +56,7 @@ function connectSocket(tabId) {
         state.video = data.video;
         state.time = data.time;
         state.paused = data.paused;
-        sendToTab({ type: 'sync', video: state.video, time: state.time, paused: state.paused });
+        broadcastToYoutubeTabs({ type: 'sync', video: state.video, time: state.time, paused: state.paused });
         break;
 
       case 'sync_time':
@@ -90,14 +65,14 @@ function connectSocket(tabId) {
 
       case 'sync_paused':
         state.paused = data.paused;
-        sendToTab({ type: 'sync_paused', paused: state.paused });
+        broadcastToYoutubeTabs({ type: 'sync_paused', paused: state.paused });
         break;
 
       case 'sync_cleared':
         state.video = null;
         state.time = 0;
         state.paused = false;
-        sendToTab({ type: 'sync_cleared' });
+        broadcastToYoutubeTabs({ type: 'sync_cleared' });
         break;
 
       case 'pong':
@@ -114,29 +89,10 @@ function connectSocket(tabId) {
     console.log('Socket disconnected');
     socket = null;
     isLeader = null;
-    connectedTabId = null;
-    injecting = false;
+    broadcastToYoutubeTabs({ type: 'disconnected' });
     chrome.runtime.sendMessage({ type: 'disconnected' }).catch(() => {});
   });
 }
-
-// Re-inject when tab finishes loading (handles full page reloads)
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (tabId !== connectedTabId) return;
-  if (changeInfo.status !== 'complete') return;
-  if (socket?.readyState !== WebSocket.OPEN) return;
-
-  console.log('Tab finished loading, re-injecting');
-  injectAndConnect();
-});
-
-// Disconnect when connected tab is closed
-chrome.tabs.onRemoved.addListener((tabId) => {
-  if (tabId !== connectedTabId) return;
-  console.log('Connected tab closed, disconnecting');
-  socket?.close();
-  connectedTabId = null;
-});
 
 function socketSend(data) {
   if (socket?.readyState === WebSocket.OPEN) {
@@ -149,7 +105,7 @@ function socketSend(data) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.type) {
     case 'connect':
-      connectSocket(message.tabId);
+      connectSocket();
       sendResponse({ ok: true });
       break;
 

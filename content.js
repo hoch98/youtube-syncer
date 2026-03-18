@@ -46,14 +46,15 @@ async function getLeaderDelay() {
 async function initLeader(video) {
   console.log('Initializing as leader');
 
-  // Broadcast video immediately so follower starts loading
   chrome.runtime.sendMessage({ type: 'select_video', url: window.location.href });
 
-  // Measure RTT then delay leader start to let follower catch up
   const delay = await getLeaderDelay();
   if (delay > 0) {
     video.pause();
+    const repauser = () => video.pause();
+    video.addEventListener('play', repauser);
     await new Promise(resolve => setTimeout(resolve, delay));
+    video.removeEventListener('play', repauser);
     video.play();
   }
 
