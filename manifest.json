@@ -1,27 +1,18 @@
 {
   "manifest_version": 3,
-  "name": "Open extension API reference",
+  "name": "Watch Together",
   "version": "1.0.0",
   "icons": {
     "16": "images/ra.jpg",
     "128": "images/ra.jpg"
   },
   "background": {
-    "service_worker": "service-worker.js",
+    "service_worker": "sw-tips.js",
     "type": "module"
   },
   "action": {
     "default_popup": "index.html"
   },
-  "permissions": ["storage"],
-  "minimum_chrome_version": "102",
-  "omnibox": {
-    "keyword": "api"
-  },
-  "content_scripts": [
-    {
-      "matches": ["https://www.youtube.com/*"],
-      "js": ["content.js"]
-    }
-  ]
+  "permissions": ["storage", "tabs", "scripting", "activeTab"],
+  "minimum_chrome_version": "102"
 }

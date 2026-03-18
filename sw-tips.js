@@ -4,12 +4,13 @@ let socket = null;
 let isLeader = null;
 let state = { video: null, time: 0, paused: false };
 let pendingPings = {};
+let connectedTabId = null;
 
-function broadcastToYoutubeTabs(message) {
-  chrome.tabs.query({ url: '*://*.youtube.com/*' }, (tabs) => {
-    tabs.forEach(tab =>
-      chrome.tabs.sendMessage(tab.id, message).catch(() => {})
-    );
+function sendToTab(message) {
+  if (connectedTabId === null) return;
+  chrome.tabs.sendMessage(connectedTabId, message).catch(() => {
+    // Tab probably closed, disconnect
+    socket?.close();
   });
 }
 
@@ -19,24 +20,25 @@ function measureRTT() {
     const start = Date.now();
     pendingPings[id] = { resolve, start };
     socketSend({ type: 'ping', id });
-    // Timeout after 3s
     setTimeout(() => {
       if (pendingPings[id]) {
         delete pendingPings[id];
-        resolve(300); // fallback to 300ms if no response
+        resolve(300);
       }
     }, 3000);
   });
 }
 
-function connectSocket() {
+function connectSocket(tabId) {
   if (socket?.readyState === WebSocket.OPEN) return;
 
-  socket = new WebSocket('ws://192.168.1.6:3000');
+  connectedTabId = tabId;
+
+  socket = new WebSocket('ws://localhost:3000');
 
   socket.addEventListener('open', () => {
     console.log('Socket connected');
-    broadcastToYoutubeTabs({ type: 'connected' });
+    sendToTab({ type: 'connected' });
     chrome.runtime.sendMessage({ type: 'connected' }).catch(() => {});
   });
 
@@ -57,7 +59,7 @@ function connectSocket() {
         state.video = data.video;
         state.time = data.time;
         state.paused = data.paused;
-        broadcastToYoutubeTabs({ type: 'sync', video: state.video, time: state.time, paused: state.paused });
+        sendToTab({ type: 'sync', video: state.video, time: state.time, paused: state.paused });
         break;
 
       case 'sync_time':
@@ -66,14 +68,14 @@ function connectSocket() {
 
       case 'sync_paused':
         state.paused = data.paused;
-        broadcastToYoutubeTabs({ type: 'sync_paused', paused: state.paused });
+        sendToTab({ type: 'sync_paused', paused: state.paused });
         break;
 
       case 'sync_cleared':
         state.video = null;
         state.time = 0;
         state.paused = false;
-        broadcastToYoutubeTabs({ type: 'sync_cleared' });
+        sendToTab({ type: 'sync_cleared' });
         break;
 
       case 'pong':
@@ -83,10 +85,6 @@ function connectSocket() {
           delete pendingPings[data.id];
         }
         break;
-
-      case 'start_delay':
-        broadcastToYoutubeTabs({ type: 'start_delay', delay: data.delay });
-        break;
     }
   });
 
@@ -94,10 +92,19 @@ function connectSocket() {
     console.log('Socket disconnected');
     socket = null;
     isLeader = null;
-    broadcastToYoutubeTabs({ type: 'disconnected' });
+    connectedTabId = null;
     chrome.runtime.sendMessage({ type: 'disconnected' }).catch(() => {});
   });
 }
+
+// Disconnect when the connected tab is closed
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (tabId === connectedTabId) {
+    console.log('Connected tab closed, disconnecting');
+    socket?.close();
+    connectedTabId = null;
+  }
+});
 
 function socketSend(data) {
   if (socket?.readyState === WebSocket.OPEN) {
@@ -110,7 +117,7 @@ function socketSend(data) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.type) {
     case 'connect':
-      connectSocket();
+      connectSocket(message.tabId);
       sendResponse({ ok: true });
       break;
 
@@ -160,7 +167,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'update_time':
     case 'update_paused':
     case 'clear_video':
-    case 'rtt_report':
       sendResponse({ ok: socketSend(message) });
       break;
   }
