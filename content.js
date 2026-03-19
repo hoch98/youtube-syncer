@@ -1,160 +1,234 @@
-// --- Global State ---
-let currentVideo = null;
-let currentRole = null;
-let syncInterval = null;
-let navigating = false;
-
-// --- Helpers ---
-const getVideoId = (url) => {
-  try {
-    return new URL(url).searchParams.get('v');
-  } catch {
-    return null;
-  }
-};
-
-const isSameVideo = (url1, url2) => {
-  if (!url1 || !url2) return false;
-  const id1 = getVideoId(url1);
-  const id2 = getVideoId(url2);
-  if (id1 && id2) return id1 === id2;
-  return url1 === url2;
-};
+let lastSyncTime = 0;
 
 function waitForElement(selector) {
   return new Promise((resolve) => {
     const el = document.querySelector(selector);
     if (el) return resolve(el);
+
     const observer = new MutationObserver(() => {
       const el = document.querySelector(selector);
       if (el) { observer.disconnect(); resolve(el); }
     });
+
     observer.observe(document.body, { childList: true, subtree: true });
   });
 }
 
-// --- Logic ---
+function getVideoId(url) {
+  try {
+    return new URL(url).searchParams.get('v');
+  } catch {
+    return null;
+  }
+}
 
-function teardown() {
-  if (syncInterval) clearInterval(syncInterval);
-  syncInterval = null;
-  currentVideo = null;
-  currentRole = null;
+function isSameVideo(url1, url2) {
+  if (!url1 || !url2) return false;
+  const id1 = getVideoId(url1);
+  const id2 = getVideoId(url2);
+  if (id1 && id2) return id1 === id2;
+  return url1 === url2;
+}
+
+let timeInterval = null;
+let currentRole = null;
+let currentVideo = null;
+let navigating = false;
+
+async function getLeaderDelay() {
+  try {
+    const { rtt } = await chrome.runtime.sendMessage({ type: 'measure_rtt' });
+    console.log('RTT:', rtt + 'ms, delaying leader by', rtt / 2 + 'ms');
+    return rtt / 2;
+  } catch {
+    return 0;
+  }
 }
 
 async function initLeader(video) {
-  console.log('Initializing as Leader');
-  chrome.runtime.sendMessage({ type: 'select_video', url: window.location.href });
-  
-  if (syncInterval) clearInterval(syncInterval);
-  syncInterval = setInterval(() => {
-    chrome.runtime.sendMessage({ type: 'update_time', time: video.currentTime });
-  }, 500);
+  console.log('Initializing as leader');
 
-  video.onpause = () => chrome.runtime.sendMessage({ type: 'update_paused', paused: true });
-  video.onplay = () => chrome.runtime.sendMessage({ type: 'update_paused', paused: false });
+  chrome.runtime.sendMessage({ type: 'select_video', url: window.location.href });
+
+  const delay = await getLeaderDelay();
+  if (delay > 0) {
+    video.pause();
+    const repauser = () => video.pause();
+    video.addEventListener('play', repauser);
+    await new Promise(resolve => setTimeout(resolve, delay));
+    video.removeEventListener('play', repauser);
+    video.play();
+  }
+
+  if (timeInterval) clearInterval(timeInterval);
+  timeInterval = setInterval(() => {
+    chrome.runtime.sendMessage({ type: 'update_time', time: video.currentTime });
+  }, 250);
+
+  video.addEventListener('pause', () => {
+    chrome.runtime.sendMessage({ type: 'update_paused', paused: true });
+  });
+  video.addEventListener('play', () => {
+    chrome.runtime.sendMessage({ type: 'update_paused', paused: false });
+  });
+}
+
+async function initFollower(video, initialTime, initialPaused) {
+  console.log('Initializing as follower, seeking to', initialTime);
+  if (initialTime) video.currentTime = initialTime;
+  if (initialPaused) video.pause();
+  else video.play();
+}
+
+function teardown() {
+  if (timeInterval) { clearInterval(timeInterval); timeInterval = null; }
+  currentRole = null;
+  currentVideo = null;
+  navigating = false;
 }
 
 function navigateTo(url) {
   if (navigating) return;
   navigating = true;
-  console.log('Navigating to leader video:', url);
+  console.log('Navigating to:', url);
   window.location.href = url;
-  // Safety timeout to unlock if navigation fails
   setTimeout(() => { navigating = false; }, 5000);
 }
 
 async function poll() {
-  const res = await chrome.runtime.sendMessage({ type: 'socket_info' }).catch(() => ({}));
-  if (!res || !res.connected) {
-    if (currentRole) teardown();
+  let res;
+  try {
+    res = await chrome.runtime.sendMessage({ type: 'socket_info' });
+  } catch {
     return;
   }
 
-  const onWatch = window.location.pathname.startsWith('/watch');
-  
-  // 1. Leader Leave Logic
-  if (res.leader && !onWatch && currentVideo) {
-    chrome.runtime.sendMessage({ type: 'clear_video' });
+  const { connected, leader, state } = res;
+
+  if (!connected) {
     teardown();
     return;
   }
 
-  // 2. Follower Navigation Logic
-  if (!res.leader && res.state.video) {
-    if (!isSameVideo(window.location.href, res.state.video)) {
-      navigateTo(res.state.video);
-      return; 
+  if (!leader) {
+    if (!state.video) return;
+    if (!isSameVideo(window.location.href, state.video)) {
+      navigateTo(state.video);
+      return;
     }
   }
 
-  const video = document.querySelector('video');
-  if (!onWatch || !video) return;
+  const onWatchPage = window.location.pathname.startsWith('/watch');
 
-  // 3. Sync/Init Logic
-  const roleChanged = currentRole !== (res.leader ? 'leader' : 'follower');
+  if (!onWatchPage) {
+    if (leader && currentVideo !== null) {
+      currentVideo = null;
+      chrome.runtime.sendMessage({ type: 'clear_video' });
+    }
+    return;
+  }
+
+  if (navigating && isSameVideo(window.location.href, state.video)) {
+    navigating = false;
+  }
+
+  const roleChanged = currentRole !== (leader ? 'leader' : 'follower');
   const videoChanged = !isSameVideo(currentVideo, window.location.href);
 
-  if (roleChanged || videoChanged) {
-    currentRole = res.leader ? 'leader' : 'follower';
-    currentVideo = window.location.href;
-    navigating = false; // We have arrived
+  if (!roleChanged && !videoChanged) {
+    if (!leader) {
+      const video = document.querySelector('video');
+      if (video && video.readyState >= 3) {
+        // Get the RTT from the service worker
+        const { rtt } = await chrome.runtime.sendMessage({ type: 'measure_rtt' });
+        const networkLatency = (rtt / 2) / 1000; // Convert ms to seconds
 
-    if (res.leader) {
-      initLeader(video);
-    } else {
-      // Follower Initial Sync: Only seek if video is ready
-      if (video.readyState >= 2) {
-        video.currentTime = res.state.time;
-        res.state.paused ? video.pause() : video.play();
+        // Predict where the leader is NOW, not where they were when they sent the msg
+        const predictedLeaderTime = state.time + networkLatency;
+        
+        const drift = Math.abs(video.currentTime - predictedLeaderTime);
+        if (drift > 0.5) { // Lower threshold for tighter sync
+          video.currentTime = predictedLeaderTime;
+        }
       }
     }
     return;
   }
 
-  // 4. Drift Correction (Follower Only)
-  if (!res.leader && video.readyState >= 3 && !video.seeking) {
-    const drift = Math.abs(video.currentTime - res.state.time);
-    if (drift > 1.5) {
-      console.log(`Drift detected: ${drift}s. Correcting...`);
-      video.currentTime = res.state.time;
+  currentRole = leader ? 'leader' : 'follower';
+  currentVideo = window.location.href;
+
+  if (timeInterval) { clearInterval(timeInterval); timeInterval = null; }
+
+  const video = await waitForElement('video');
+
+  if (leader) {
+    await initLeader(video);
+  } else {
+    // Only init if we haven't set the time for this specific video yet
+    if (currentVideo !== window.location.href) {
+      await initFollower(video, state.time, state.paused);
+      currentVideo = window.location.href; // Mark as initialized
     }
   }
 }
 
-// --- Listeners ---
-
-chrome.runtime.onMessage.addListener((msg) => {
-  const video = document.querySelector('video');
-  
-  switch (msg.type) {
-    case 'sync_paused':
-      if (video) msg.paused ? video.pause() : video.play();
+chrome.runtime.onMessage.addListener(async (message) => {
+  switch (message.type) {
+    case 'connected':
+      teardown();
+      await poll();
       break;
 
-    case 'sync_time':
-      // Direct sync to reduce delay, only for followers
-      if (video && currentRole === 'follower' && !video.seeking) {
-        const drift = Math.abs(video.currentTime - msg.time);
-        if (drift > 2) video.currentTime = msg.time;
+    case 'disconnected':
+      teardown();
+      break;
+
+    case 'sync': {
+      if (message.video && !isSameVideo(window.location.href, message.video)) {
+        navigateTo(message.video);
+      } else {
+        const video = document.querySelector('video');
+        if (video) {
+          if (message.paused) video.pause();
+          else video.play();
+        }
       }
       break;
+    }
 
-    case 'sync_cleared':
-      teardown();
+    case 'sync_cleared': {
+      console.log('Video cleared by leader');
+      currentRole = null;
+      currentVideo = null;
+      navigating = false;
       if (window.location.pathname.startsWith('/watch')) {
         window.location.href = 'https://www.youtube.com';
       }
       break;
-    
-    case 'connected':
-    case 'disconnected':
-      teardown();
-      poll();
+    }
+
+    case 'sync_paused': {
+      const video = document.querySelector('video');
+      if (!video) break;
+      message.paused ? video.pause() : video.play();
       break;
+    }
+
+    case 'sync_time': {
+      const video = document.querySelector('video');
+      if (!video) break;
+      const drift = Math.abs(video.currentTime - message.time);
+      if (drift > 2) video.currentTime = message.time;
+      break;
+    }
   }
 });
 
-// Run
-setInterval(poll, 1000);
+setInterval(poll, 500);
+
+setInterval(() => {
+  if (currentRole === 'follower') poll();
+}, 5000);
+
 poll();
