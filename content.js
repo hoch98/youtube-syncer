@@ -3,10 +3,9 @@ let currentRole = null;
 let syncInterval = null;
 let navigating = false;
 
-const isSameVideo = (url1, url2) => {
-  if (!url1 || !url2) return false;
+const isSameVideo = (u1, u2) => {
   const getV = (u) => { try { return new URL(u).searchParams.get('v'); } catch { return null; } };
-  return getV(url1) === getV(url2);
+  return getV(u1) === getV(u2);
 };
 
 function teardown() {
@@ -31,7 +30,7 @@ async function poll() {
   const res = await chrome.runtime.sendMessage({ type: 'socket_info' }).catch(() => ({}));
   if (!res || !res.connected) return;
 
-  // 1. If server state is cleared, stop everything
+  // 1. Reset if server state is empty
   if (!res.state.video) {
     if (currentVideo !== null) teardown();
     return;
@@ -39,14 +38,14 @@ async function poll() {
 
   const onWatch = window.location.pathname.startsWith('/watch');
 
-  // 2. Leader Leave Logic
+  // 2. Leader Navigation
   if (res.leader && !onWatch && currentVideo) {
     chrome.runtime.sendMessage({ type: 'clear_video' });
     teardown();
     return;
   }
 
-  // 3. Follower Navigation Logic
+  // 3. Follower Navigation
   if (!res.leader && res.state.video && !isSameVideo(window.location.href, res.state.video)) {
     if (!navigating) {
       navigating = true;
@@ -58,43 +57,52 @@ async function poll() {
   const video = document.querySelector('video');
   if (!onWatch || !video) return;
 
-  // 4. Sync/Init Logic
-  if (currentRole !== (res.leader ? 'leader' : 'follower') || !isSameVideo(currentVideo, window.location.href)) {
+  // 4. Sync / Looping Prevention
+  const roleChanged = currentRole !== (res.leader ? 'leader' : 'follower');
+  const videoChanged = !isSameVideo(currentVideo, window.location.href);
+
+  if (roleChanged || videoChanged) {
     currentRole = res.leader ? 'leader' : 'follower';
     currentVideo = window.location.href;
     navigating = false;
 
     if (res.leader) {
       initLeader(video);
-    } else if (video.readyState >= 2) {
-      video.currentTime = res.state.time;
-      res.state.paused ? video.pause() : video.play();
+    } else {
+      // ONLY seek if the video is ready (readyState >= 2: HAVE_CURRENT_DATA)
+      // This prevents the "Loop at 0" bug
+      if (video.readyState >= 2) {
+        video.currentTime = res.state.time;
+        res.state.paused ? video.pause() : video.play();
+      }
     }
+    return;
   }
 
-  // 5. Follower Drift Correction
+  // 5. Drift Correction (Only for followers who aren't currently seeking/buffering)
   if (!res.leader && video.readyState >= 3 && !video.seeking) {
     const drift = Math.abs(video.currentTime - res.state.time);
-    if (drift > 1.5) video.currentTime = res.state.time;
+    if (drift > 2) video.currentTime = res.state.time;
   }
 }
 
 chrome.runtime.onMessage.addListener((msg) => {
   const video = document.querySelector('video');
+  if (!video) return;
+
   switch (msg.type) {
     case 'sync_paused':
-      if (video) msg.paused ? video.pause() : video.play();
+      msg.paused ? video.pause() : video.play();
       break;
     case 'sync_time':
-      if (video && currentRole === 'follower' && !video.seeking) {
-        if (Math.abs(video.currentTime - msg.time) > 2) video.currentTime = msg.time;
+      // Only correct if we are a follower and not already busy seeking
+      if (currentRole === 'follower' && video.readyState >= 3 && !video.seeking) {
+        if (Math.abs(video.currentTime - msg.time) > 3) video.currentTime = msg.time;
       }
       break;
     case 'sync_cleared':
       teardown();
-      if (window.location.pathname.startsWith('/watch')) {
-        window.location.href = 'https://www.youtube.com';
-      }
+      if (window.location.pathname.startsWith('/watch')) window.location.href = 'https://www.youtube.com';
       break;
   }
 });
