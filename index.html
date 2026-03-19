@@ -4,15 +4,28 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Watch Together</title>
+  <style>
+    body {
+      width: 300px;
+      padding: 12px;
+      box-sizing: border-box;
+    }
+  </style>
 </head>
 <body>
   <p id="socketInfo">...</p>
   <p id="leaderInfo">...</p>
-  <input id="wsUrl" type="text" placeholder="ws://localhost:3000" style="width: 100%; box-sizing: border-box;" />
-  <button id="saveUrl">Save URL</button>
-  <br><br>
-  <button id="connectButton">Connect</button>
-  <button id="disconnectButton">Disconnect</button>
+
+  <div id="joinView">
+    <input id="sessionCode" type="text" placeholder="Enter session code" style="width: 100%; box-sizing: border-box;" />
+    <br>
+    <button id="joinButton">Join</button>
+  </div>
+
+  <div id="connectedView" style="display: none;">
+    <button id="disconnectButton">Disconnect</button>
+  </div>
+
   <script src="js/index.js"></script>
 </body>
 </html>

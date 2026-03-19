@@ -1,23 +1,45 @@
-function updateUI({ connected, leader }) {
-  document.getElementById("socketInfo").innerText = `Socket: ${connected ? 'open' : 'closed'}`;
-  document.getElementById("leaderInfo").innerText = `Leader: ${connected ? leader : '~~~'}`;
+function codeToUrl(code) {
+  return `wss://${code}.ngrok-free.app`;
 }
 
-// Load saved URL on popup open
-chrome.storage.local.get('wsUrl', (data) => {
-  document.getElementById("wsUrl").value = data.wsUrl || 'ws://192.168.1.6:3000';
+function showJoinView() {
+  document.getElementById("joinView").style.display = 'block';
+  document.getElementById("connectedView").style.display = 'none';
+  document.getElementById("socketInfo").innerText = 'Socket: closed';
+  document.getElementById("leaderInfo").innerText = 'Leader: ~~~';
+}
+
+function showConnectedView({ leader }) {
+  document.getElementById("joinView").style.display = 'none';
+  document.getElementById("connectedView").style.display = 'block';
+  document.getElementById("socketInfo").innerText = 'Socket: open';
+  document.getElementById("leaderInfo").innerText = `Leader: ${leader ?? '...'}`;
+}
+
+// Load saved session code
+chrome.storage.local.get(['sessionCode', 'wsUrl'], (data) => {
+  if (data.sessionCode) {
+    document.getElementById("sessionCode").value = data.sessionCode;
+  }
 });
 
-document.getElementById("saveUrl").onclick = () => {
-  const url = document.getElementById("wsUrl").value.trim();
-  chrome.storage.local.set({ wsUrl: url }, () => {
-    document.getElementById("saveUrl").innerText = 'Saved!';
-    setTimeout(() => document.getElementById("saveUrl").innerText = 'Save URL', 1000);
-  });
-};
+// Set initial UI state based on socket
+chrome.runtime.sendMessage({ type: 'socket_info' }).then((data) => {
+  if (data.connected) {
+    showConnectedView({ leader: data.leader });
+  } else {
+    showJoinView();
+  }
+});
 
-document.getElementById("connectButton").onclick = () => {
-  chrome.runtime.sendMessage({ type: 'connect' });
+document.getElementById("joinButton").onclick = () => {
+  const code = document.getElementById("sessionCode").value.trim();
+  if (!code) return;
+
+  const url = codeToUrl(code);
+  chrome.storage.local.set({ sessionCode: code, wsUrl: url }, () => {
+    chrome.runtime.sendMessage({ type: 'connect' });
+  });
 };
 
 document.getElementById("disconnectButton").onclick = () => {
@@ -25,11 +47,7 @@ document.getElementById("disconnectButton").onclick = () => {
 };
 
 chrome.runtime.onMessage.addListener((message) => {
-  if (message.type === 'connected') updateUI({ connected: true, leader: null });
-  if (message.type === 'disconnected') updateUI({ connected: false, leader: null });
-  if (message.type === 'connection') updateUI({ connected: true, leader: message.leader });
-});
-
-chrome.runtime.sendMessage({ type: 'socket_info' }).then((data) => {
-  updateUI({ connected: data.connected, leader: data.leader });
+  if (message.type === 'connected') showConnectedView({ leader: null });
+  if (message.type === 'disconnected') showJoinView();
+  if (message.type === 'connection') showConnectedView({ leader: message.leader });
 });
