@@ -63,7 +63,7 @@ async function initLeader(video) {
   if (timeInterval) clearInterval(timeInterval);
   timeInterval = setInterval(() => {
     chrome.runtime.sendMessage({ type: 'update_time', time: video.currentTime });
-  }, 1000);
+  }, 250);
 
   video.addEventListener('pause', () => {
     chrome.runtime.sendMessage({ type: 'update_paused', paused: true });
@@ -122,35 +122,33 @@ async function poll() {
 
   if (!onWatchPage) {
     if (leader && currentVideo !== null) {
-          currentVideo = null;
-          chrome.runtime.sendMessage({ type: 'clear_video' });
-        }
-        return;
-      }
+      currentVideo = null;
+      chrome.runtime.sendMessage({ type: 'clear_video' });
+    }
+    return;
+  }
 
-      if (navigating && isSameVideo(window.location.href, state.video)) {
-        navigating = false;
-      }
+  if (navigating && isSameVideo(window.location.href, state.video)) {
+    navigating = false;
+  }
 
-      const roleChanged = currentRole !== (leader ? 'leader' : 'follower');
-      const videoChanged = !isSameVideo(currentVideo, window.location.href);
+  const roleChanged = currentRole !== (leader ? 'leader' : 'follower');
+  const videoChanged = !isSameVideo(currentVideo, window.location.href);
 
-      if (!roleChanged && !videoChanged) {
-        if (!leader) {
+  if (!roleChanged && !videoChanged) {
+    if (!leader) {
       const video = document.querySelector('video');
-      // Only sync if the video is actually ready to play (readyState 3 or 4)
-      if (video && video.readyState >= 3) { 
-        const drift = Math.abs(video.currentTime - state.time);
+      if (video && video.readyState >= 3) {
+        // Get the RTT from the service worker
+        const { rtt } = await chrome.runtime.sendMessage({ type: 'measure_rtt' });
+        const networkLatency = (rtt / 2) / 1000; // Convert ms to seconds
+
+        // Predict where the leader is NOW, not where they were when they sent the msg
+        const predictedLeaderTime = state.time + networkLatency;
         
-        // Increase the threshold slightly and ensure we aren't 
-        // spamming seeks while the video is still seeking
-        if (drift > 2 && !video.seeking) { 
-          console.log(`Drift detected: ${drift.toFixed(2)}s, correcting...`);
-          video.currentTime = state.time;
-        }
-        
-        if (video.paused !== state.paused) {
-          state.paused ? video.pause() : video.play();
+        const drift = Math.abs(video.currentTime - predictedLeaderTime);
+        if (drift > 0.5) { // Lower threshold for tighter sync
+          video.currentTime = predictedLeaderTime;
         }
       }
     }
@@ -227,7 +225,7 @@ chrome.runtime.onMessage.addListener(async (message) => {
   }
 });
 
-setInterval(poll, 1000);
+setInterval(poll, 500);
 
 setInterval(() => {
   if (currentRole === 'follower') poll();
