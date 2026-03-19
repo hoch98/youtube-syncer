@@ -12,19 +12,33 @@ function broadcast(message) {
 function connectSocket() {
   if (socket) socket.close();
   chrome.storage.local.get('wsUrl', (data) => {
-    if (!data.wsUrl) return;
-    socket = new WebSocket(data.wsUrl);
+    const url = data.wsUrl || 'ws://localhost:3000';
+    socket = new WebSocket(url);
+
+    socket.onopen = () => broadcast({ type: 'connected' });
 
     socket.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
-      switch (msg.type) {
-        case 'connection': isLeader = msg.leader; break;
-        case 'sync': state = msg; break;
-        case 'sync_time': state.time = msg.time; break;
-        case 'sync_paused': state.paused = msg.paused; break;
-        case 'sync_cleared': state = { video: null, time: 0, paused: false }; break;
+      let data = null;
+      try { data = JSON.parse(event.data); } catch { return; }
+
+      switch (data.type) {
+        case 'connection':
+          isLeader = data.leader;
+          break;
+        case 'sync':
+          state = { video: data.video, time: data.time, paused: data.paused };
+          break;
+        case 'sync_time':
+          state.time = data.time;
+          break;
+        case 'sync_paused':
+          state.paused = data.paused;
+          break;
+        case 'sync_cleared':
+          state = { video: null, time: 0, paused: false };
+          break;
       }
-      broadcast(msg);
+      broadcast(data);
     };
 
     socket.onclose = () => {
@@ -32,19 +46,23 @@ function connectSocket() {
       isLeader = null;
       broadcast({ type: 'disconnected' });
     };
-    socket.onopen = () => broadcast({ type: 'connected' });
   });
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'socket_info') {
-    sendResponse({ connected: socket?.readyState === 1, leader: isLeader, state });
-  } else if (message.type === 'connect') {
-    connectSocket();
-  } else if (message.type === 'disconnect') {
-    socket?.close();
-  } else if (socket?.readyState === 1) {
-    socket.send(JSON.stringify(message));
+  switch (message.type) {
+    case 'connect':
+      connectSocket();
+      break;
+    case 'disconnect':
+      socket?.close();
+      break;
+    case 'socket_info':
+      sendResponse({ connected: socket?.readyState === 1, leader: isLeader, state });
+      break;
+    default:
+      if (socket?.readyState === 1) socket.send(JSON.stringify(message));
+      break;
   }
   return true;
 });
