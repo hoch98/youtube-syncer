@@ -33,6 +33,13 @@ function connectSocket() {
           state.paused = data.paused;
           broadcast(data);
           break;
+        // Inside socket.onmessage switch block:
+        case 'sync_cleared':
+          state.video = null;
+          state.time = 0;
+          state.paused = false;
+          broadcast({ type: 'sync_cleared' }); // Tell all tabs to reset
+          break;
       }
     };
 

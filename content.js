@@ -30,7 +30,6 @@ async function initLeader(video) {
 
   if (timeInterval) clearInterval(timeInterval);
   timeInterval = setInterval(() => {
-    // High frequency update (250ms) for low delay
     chrome.runtime.sendMessage({ type: 'update_time', time: video.currentTime });
   }, 250);
 
@@ -48,6 +47,17 @@ function navigateTo(url) {
   if (navigating) return;
   navigating = true;
   window.location.href = url;
+  // Unlock navigation after a delay to allow page load
+  setTimeout(() => { navigating = false; }, 2000);
+}
+
+// Resets local tracking variables
+function resetState() {
+  if (timeInterval) clearInterval(timeInterval);
+  timeInterval = null;
+  currentRole = null;
+  currentVideo = null;
+  navigating = false;
 }
 
 async function poll() {
@@ -57,23 +67,34 @@ async function poll() {
 
   if (!connected) return;
 
-  // 1. Navigation Logic
-  if (!leader && state.video && !isSameVideo(window.location.href, state.video)) {
-    navigateTo(state.video);
+  const onWatchPage = window.location.pathname.startsWith('/watch');
+
+  // --- 1. Leader-Specific Clear Logic ---
+  // If leader leaves a video page, tell the server to clear the global state
+  if (leader && !onWatchPage && currentVideo !== null) {
+    console.log('Leader left watch page, clearing video state');
+    chrome.runtime.sendMessage({ type: 'clear_video' });
+    resetState();
     return;
   }
 
-  const onWatchPage = window.location.pathname.startsWith('/watch');
+  // --- 2. Follower-Specific Navigation ---
+  if (!leader) {
+    if (state.video && !isSameVideo(window.location.href, state.video)) {
+      navigateTo(state.video);
+      return;
+    }
+  }
+
   if (!onWatchPage) return;
 
   const roleChanged = currentRole !== (leader ? 'leader' : 'follower');
   const videoChanged = !isSameVideo(currentVideo, window.location.href);
 
-  // 2. Drift Correction (Follower Only)
+  // --- 3. Drift Correction ---
   if (!roleChanged && !videoChanged) {
     if (!leader) {
       const video = document.querySelector('video');
-      // readyState >= 3 means the video has enough data to seek/play
       if (video && video.readyState >= 3 && !video.seeking) {
         const drift = Math.abs(video.currentTime - state.time);
         if (drift > 1.5) video.currentTime = state.time; 
@@ -83,7 +104,7 @@ async function poll() {
     return;
   }
 
-  // 3. Initialization
+  // --- 4. Initialization ---
   currentRole = leader ? 'leader' : 'follower';
   currentVideo = window.location.href;
   const video = await waitForElement('video');
@@ -92,17 +113,31 @@ async function poll() {
   else await initFollower(video, state.time, state.paused);
 }
 
-// Listen for direct sync messages from Service Worker
+// --- 5. Message Listener (Immediate Actions) ---
 chrome.runtime.onMessage.addListener((msg) => {
   const video = document.querySelector('video');
-  if (!video || video.readyState < 3) return;
 
-  if (msg.type === 'sync_paused') {
-    msg.paused ? video.pause() : video.play();
-  } else if (msg.type === 'sync' && !isSameVideo(window.location.href, msg.video)) {
-    navigateTo(msg.video);
+  switch (msg.type) {
+    case 'sync_paused':
+      if (video) msg.paused ? video.pause() : video.play();
+      break;
+
+    case 'sync_cleared':
+      console.log('Video cleared by server');
+      resetState();
+      // Redirect follower to home if they're still on a video
+      if (window.location.pathname.startsWith('/watch')) {
+        window.location.href = 'https://www.youtube.com';
+      }
+      break;
+
+    case 'sync':
+      if (!isSameVideo(window.location.href, msg.video)) {
+        navigateTo(msg.video);
+      }
+      break;
   }
 });
 
-setInterval(poll, 500); // Check status every half second
+setInterval(poll, 500);
 poll();
