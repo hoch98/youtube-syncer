@@ -29,46 +29,30 @@ function teardown() {
 
 async function poll() {
   const res = await chrome.runtime.sendMessage({ type: 'socket_info' }).catch(() => ({}));
-  if (!res.connected) return;
+  if (!res || !res.connected) return;
 
-  const onWatch = window.location.pathname.startsWith('/watch');
   const video = document.querySelector('video');
-
-  // Handle Leader leaving a video
-  if (res.leader && !onWatch && currentVideo) {
-    chrome.runtime.sendMessage({ type: 'clear_video' });
-    teardown();
-    return;
-  }
-
-  // Handle Follower navigation
-  if (!res.leader && res.state.video && !isSameVideo(window.location.href, res.state.video)) {
-    window.location.href = res.state.video;
-    return;
-  }
+  const onWatch = window.location.pathname.startsWith('/watch');
 
   if (!onWatch || !video) return;
 
-  // Initialization/Sync Logic
-  const roleChanged = currentRole !== (res.leader ? 'leader' : 'follower');
-  const videoChanged = !isSameVideo(currentVideo, window.location.href);
-
-  if (roleChanged || videoChanged) {
+  // INITIAL SYNC (Role or Video changed)
+  if (currentRole !== (res.leader ? 'leader' : 'follower') || !isSameVideo(currentVideo, window.location.href)) {
     currentRole = res.leader ? 'leader' : 'follower';
     currentVideo = window.location.href;
+
     if (res.leader) {
       initLeader(video);
     } else {
-      // Follower initial sync: wait for video data to prevent looping at 0
-      if (video.readyState >= 2) {
+      // THE FIX: Wait for metadata/ready before seeking to prevent the start-loop
+      if (video.readyState >= 2) { 
         video.currentTime = res.state.time;
         res.state.paused ? video.pause() : video.play();
       }
     }
-    return;
   }
 
-  // Drift Correction for Followers
+  // DRIFT CORRECTION (Only if not seeking)
   if (!res.leader && video.readyState >= 3 && !video.seeking) {
     const drift = Math.abs(video.currentTime - res.state.time);
     if (drift > 1.5) video.currentTime = res.state.time;

@@ -1,35 +1,29 @@
 function codeToUrl(code) {
+  // If the code contains a colon (like 192.168.1.5:3000), it's a local IP
+  if (code.includes(':')) {
+    return `ws://${code}`;
+  }
+  // Otherwise, treat it as an ngrok ID
   return `wss://${code}.ngrok-free.app`;
 }
 
-function showJoinView() {
-  document.getElementById("joinView").style.display = 'block';
-  document.getElementById("connectedView").style.display = 'none';
-  document.getElementById("socketInfo").innerText = 'Socket: closed';
-  document.getElementById("leaderInfo").innerText = 'Leader: ~~~';
-}
-
-function showConnectedView({ leader }) {
-  document.getElementById("joinView").style.display = 'none';
-  document.getElementById("connectedView").style.display = 'block';
-  document.getElementById("socketInfo").innerText = 'Socket: open';
-  document.getElementById("leaderInfo").innerText = `Leader: ${leader ?? '...'}`;
-}
-
-// Load saved session code
-chrome.storage.local.get(['sessionCode', 'wsUrl'], (data) => {
-  if (data.sessionCode) {
-    document.getElementById("sessionCode").value = data.sessionCode;
-  }
-});
-
-// Set initial UI state based on socket
-chrome.runtime.sendMessage({ type: 'socket_info' }).then((data) => {
+function updateUI(data) {
   if (data.connected) {
-    showConnectedView({ leader: data.leader });
+    document.getElementById("joinView").style.display = 'none';
+    document.getElementById("connectedView").style.display = 'block';
+    document.getElementById("socketInfo").innerText = 'Socket: connected';
+    document.getElementById("leaderInfo").innerText = `Role: ${data.leader ? 'Leader' : 'Follower'}`;
   } else {
-    showJoinView();
+    document.getElementById("joinView").style.display = 'block';
+    document.getElementById("connectedView").style.display = 'none';
+    document.getElementById("socketInfo").innerText = 'Socket: disconnected';
+    document.getElementById("leaderInfo").innerText = 'Role: ---';
   }
+}
+
+// Check status on popup open
+chrome.runtime.sendMessage({ type: 'socket_info' }, (data) => {
+  if (data) updateUI(data);
 });
 
 document.getElementById("joinButton").onclick = () => {
@@ -46,8 +40,11 @@ document.getElementById("disconnectButton").onclick = () => {
   chrome.runtime.sendMessage({ type: 'disconnect' });
 };
 
+// Listen for real-time updates while popup is open
 chrome.runtime.onMessage.addListener((message) => {
-  if (message.type === 'connected') showConnectedView({ leader: null });
-  if (message.type === 'disconnected') showJoinView();
-  if (message.type === 'connection') showConnectedView({ leader: message.leader });
+  if (['connected', 'disconnected', 'connection'].includes(message.type)) {
+    chrome.runtime.sendMessage({ type: 'socket_info' }, (data) => {
+      if (data) updateUI(data);
+    });
+  }
 });

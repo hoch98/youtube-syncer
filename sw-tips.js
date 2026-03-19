@@ -6,48 +6,48 @@ function broadcast(message) {
   chrome.tabs.query({ url: '*://*.youtube.com/*' }, (tabs) => {
     tabs.forEach(tab => chrome.tabs.sendMessage(tab.id, message).catch(() => {}));
   });
+  // Also send to popup if it's open
+  chrome.runtime.sendMessage(message).catch(() => {});
 }
 
 function connectSocket() {
-  if (socket) return;
+  if (socket) socket.close();
+  
   chrome.storage.local.get('wsUrl', (data) => {
-    socket = new WebSocket(data.wsUrl || 'ws://localhost:3000');
+    if (!data.wsUrl) return;
+    socket = new WebSocket(data.wsUrl);
+
+    socket.onopen = () => broadcast({ type: 'connected' });
 
     socket.onmessage = (event) => {
       const msg = JSON.parse(event.data);
-      switch (msg.type) {
-        case 'connection':
-          isLeader = msg.leader;
-          break;
-        case 'sync':
-          state = { video: msg.video, time: msg.time, paused: msg.paused };
-          broadcast(msg);
-          break;
-        case 'sync_time':
-          state.time = msg.time;
-          broadcast(msg);
-          break;
-        case 'sync_paused':
-          state.paused = msg.paused;
-          broadcast(msg);
-          break;
-        case 'sync_cleared':
-          state = { video: null, time: 0, paused: false };
-          broadcast(msg);
-          break;
-      }
+      if (msg.type === 'connection') isLeader = msg.leader;
+      if (msg.type === 'sync') state = msg;
+      if (msg.type === 'sync_time') state.time = msg.time;
+      if (msg.type === 'sync_paused') state.paused = msg.paused;
+      broadcast(msg);
     };
 
-    socket.onclose = () => { socket = null; isLeader = null; };
+    socket.onclose = () => {
+      socket = null;
+      isLeader = null;
+      broadcast({ type: 'disconnected' });
+    };
   });
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'socket_info') {
-    sendResponse({ connected: socket?.readyState === 1, leader: isLeader, state });
+    sendResponse({ 
+      connected: socket?.readyState === WebSocket.OPEN, 
+      leader: isLeader, 
+      state 
+    });
   } else if (message.type === 'connect') {
     connectSocket();
-  } else if (socket?.readyState === 1) {
+  } else if (message.type === 'disconnect') {
+    socket?.close();
+  } else if (socket?.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify(message));
   }
   return true;
