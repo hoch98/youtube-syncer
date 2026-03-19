@@ -1,30 +1,10 @@
-console.log('Service worker started');
-
 let socket = null;
 let isLeader = null;
 let state = { video: null, time: 0, paused: false };
-let pendingPings = {};
 
-function broadcastToYoutubeTabs(message) {
+function broadcast(message) {
   chrome.tabs.query({ url: '*://*.youtube.com/*' }, (tabs) => {
-    tabs.forEach(tab =>
-      chrome.tabs.sendMessage(tab.id, message).catch(() => {})
-    );
-  });
-}
-
-function measureRTT() {
-  return new Promise((resolve) => {
-    const id = Math.random().toString(36).slice(2);
-    const start = Date.now();
-    pendingPings[id] = { resolve, start };
-    socketSend({ type: 'ping', id });
-    setTimeout(() => {
-      if (pendingPings[id]) {
-        delete pendingPings[id];
-        resolve(300);
-      }
-    }, 3000);
+    tabs.forEach(tab => chrome.tabs.sendMessage(tab.id, message).catch(() => {}));
   });
 }
 
@@ -32,137 +12,41 @@ function connectSocket() {
   if (socket?.readyState === WebSocket.OPEN) return;
 
   chrome.storage.local.get('wsUrl', (data) => {
-    const url = data.wsUrl || 'ws://192.168.1.6:3000';
-    console.log('Connecting to:', url);
+    socket = new WebSocket(data.wsUrl || 'ws://192.168.1.6:3000');
 
-    socket = new WebSocket(url);
-
-    socket.addEventListener('open', () => {
-      console.log('Socket connected');
-      broadcastToYoutubeTabs({ type: 'connected' });
-      chrome.runtime.sendMessage({ type: 'connected' }).catch(() => {});
-    });
-
-    socket.addEventListener('message', (event) => {
-      let data = null;
-      try { data = JSON.parse(event.data); }
-      catch { return; }
-      if (!data) return;
-
+    socket.onopen = () => broadcast({ type: 'connected' });
+    
+    socket.onmessage = (event) => {
+      const data = JSON.parse(event.data);
       switch (data.type) {
         case 'connection':
           isLeader = data.leader;
-          console.log('Role assigned:', isLeader ? 'leader' : 'follower');
-          chrome.runtime.sendMessage({ type: 'connection', leader: isLeader }).catch(() => {});
           break;
-
         case 'sync':
-          state.video = data.video;
-          state.time = data.time;
-          state.paused = data.paused;
-          broadcastToYoutubeTabs({ type: 'sync', video: state.video, time: state.time, paused: state.paused });
+          state = { video: data.video, time: data.time, paused: data.paused };
+          broadcast(data);
           break;
-
         case 'sync_time':
           state.time = data.time;
           break;
-
         case 'sync_paused':
           state.paused = data.paused;
-          broadcastToYoutubeTabs({ type: 'sync_paused', paused: state.paused });
-          break;
-
-        case 'sync_cleared':
-          state.video = null;
-          state.time = 0;
-          state.paused = false;
-          broadcastToYoutubeTabs({ type: 'sync_cleared' });
-          break;
-
-        case 'pong':
-          if (pendingPings[data.id]) {
-            const rtt = Date.now() - pendingPings[data.id].start;
-            pendingPings[data.id].resolve(rtt);
-            delete pendingPings[data.id];
-          }
+          broadcast(data);
           break;
       }
-    });
+    };
 
-    socket.addEventListener('close', () => {
-      console.log('Socket disconnected');
-      socket = null;
-      isLeader = null;
-      broadcastToYoutubeTabs({ type: 'disconnected' });
-      chrome.runtime.sendMessage({ type: 'disconnected' }).catch(() => {});
-    });
+    socket.onclose = () => { socket = null; isLeader = null; };
   });
 }
 
-function socketSend(data) {
-  if (socket?.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify(data));
-    return true;
-  }
-  return false;
-}
-
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  switch (message.type) {
-    case 'connect':
-      connectSocket();
-      sendResponse({ ok: true });
-      break;
-
-    case 'disconnect':
-      socket?.close();
-      sendResponse({ ok: true });
-      break;
-
-    case 'socket_info':
-      if (socket?.readyState === WebSocket.OPEN && isLeader === null) {
-        const handler = (event) => {
-          let data = null;
-          try { data = JSON.parse(event.data); }
-          catch { return; }
-          if (!data) return;
-
-          if (data.type === 'connection') isLeader = data.leader;
-          if (data.type === 'sync') {
-            state.video = data.video;
-            state.time = data.time;
-            state.paused = data.paused;
-          }
-
-          if (isLeader !== null) {
-            socket.removeEventListener('message', handler);
-            sendResponse({ connected: true, leader: isLeader, state });
-          }
-        };
-        socket.addEventListener('message', handler);
-      } else {
-        sendResponse({
-          connected: socket?.readyState === WebSocket.OPEN,
-          leader: isLeader,
-          state
-        });
-      }
-      break;
-
-    case 'measure_rtt':
-      measureRTT().then((rtt) => {
-        console.log('RTT measured:', rtt + 'ms');
-        sendResponse({ rtt });
-      });
-      break;
-
-    case 'select_video':
-    case 'update_time':
-    case 'update_paused':
-    case 'clear_video':
-      sendResponse({ ok: socketSend(message) });
-      break;
+  if (message.type === 'socket_info') {
+    sendResponse({ connected: socket?.readyState === WebSocket.OPEN, leader: isLeader, state });
+  } else if (['select_video', 'update_time', 'update_paused'].includes(message.type)) {
+    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+  } else if (message.type === 'connect') {
+    connectSocket();
   }
-
   return true;
 });
