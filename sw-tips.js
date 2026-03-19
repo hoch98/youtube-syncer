@@ -9,36 +9,31 @@ function broadcast(message) {
 }
 
 function connectSocket() {
-  if (socket?.readyState === WebSocket.OPEN) return;
-
+  if (socket) return;
   chrome.storage.local.get('wsUrl', (data) => {
-    socket = new WebSocket(data.wsUrl || 'ws://192.168.1.6:3000');
+    socket = new WebSocket(data.wsUrl || 'ws://localhost:3000');
 
-    socket.onopen = () => broadcast({ type: 'connected' });
-    
     socket.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      switch (data.type) {
+      const msg = JSON.parse(event.data);
+      switch (msg.type) {
         case 'connection':
-          isLeader = data.leader;
+          isLeader = msg.leader;
           break;
         case 'sync':
-          state = { video: data.video, time: data.time, paused: data.paused };
-          broadcast(data);
+          state = { video: msg.video, time: msg.time, paused: msg.paused };
+          broadcast(msg);
           break;
         case 'sync_time':
-          state.time = data.time;
+          state.time = msg.time;
+          broadcast(msg);
           break;
         case 'sync_paused':
-          state.paused = data.paused;
-          broadcast(data);
+          state.paused = msg.paused;
+          broadcast(msg);
           break;
-        // Inside socket.onmessage switch block:
         case 'sync_cleared':
-          state.video = null;
-          state.time = 0;
-          state.paused = false;
-          broadcast({ type: 'sync_cleared' }); // Tell all tabs to reset
+          state = { video: null, time: 0, paused: false };
+          broadcast(msg);
           break;
       }
     };
@@ -49,11 +44,11 @@ function connectSocket() {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'socket_info') {
-    sendResponse({ connected: socket?.readyState === WebSocket.OPEN, leader: isLeader, state });
-  } else if (['select_video', 'update_time', 'update_paused'].includes(message.type)) {
-    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+    sendResponse({ connected: socket?.readyState === 1, leader: isLeader, state });
   } else if (message.type === 'connect') {
     connectSocket();
+  } else if (socket?.readyState === 1) {
+    socket.send(JSON.stringify(message));
   }
   return true;
 });
