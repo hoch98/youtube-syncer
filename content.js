@@ -1,3 +1,5 @@
+let lastSyncTime = 0;
+
 function waitForElement(selector) {
   return new Promise((resolve) => {
     const el = document.querySelector(selector);
@@ -120,28 +122,33 @@ async function poll() {
 
   if (!onWatchPage) {
     if (leader && currentVideo !== null) {
-      currentVideo = null;
-      chrome.runtime.sendMessage({ type: 'clear_video' });
-    }
-    return;
-  }
+          currentVideo = null;
+          chrome.runtime.sendMessage({ type: 'clear_video' });
+        }
+        return;
+      }
 
-  if (navigating && isSameVideo(window.location.href, state.video)) {
-    navigating = false;
-  }
+      if (navigating && isSameVideo(window.location.href, state.video)) {
+        navigating = false;
+      }
 
-  const roleChanged = currentRole !== (leader ? 'leader' : 'follower');
-  const videoChanged = !isSameVideo(currentVideo, window.location.href);
+      const roleChanged = currentRole !== (leader ? 'leader' : 'follower');
+      const videoChanged = !isSameVideo(currentVideo, window.location.href);
 
-  if (!roleChanged && !videoChanged) {
-    if (!leader) {
+      if (!roleChanged && !videoChanged) {
+        if (!leader) {
       const video = document.querySelector('video');
-      if (video) {
+      // Only sync if the video is actually ready to play (readyState 3 or 4)
+      if (video && video.readyState >= 3) { 
         const drift = Math.abs(video.currentTime - state.time);
-        if (drift > 1) {
+        
+        // Increase the threshold slightly and ensure we aren't 
+        // spamming seeks while the video is still seeking
+        if (drift > 2 && !video.seeking) { 
           console.log(`Drift detected: ${drift.toFixed(2)}s, correcting...`);
           video.currentTime = state.time;
         }
+        
         if (video.paused !== state.paused) {
           state.paused ? video.pause() : video.play();
         }
@@ -160,7 +167,11 @@ async function poll() {
   if (leader) {
     await initLeader(video);
   } else {
-    await initFollower(video, state.time, state.paused);
+    // Only init if we haven't set the time for this specific video yet
+    if (currentVideo !== window.location.href) {
+      await initFollower(video, state.time, state.paused);
+      currentVideo = window.location.href; // Mark as initialized
+    }
   }
 }
 
